@@ -6,10 +6,9 @@ Minimalist burn-rate indicator for **Claude Code**, designed for **Claude Max** 
 
 Claude Max meters usage in **rolling 5-hour blocks**. The official UI surfaces this only after you hit a limit. `claude-burn` puts a one-line indicator in Claude Code's statusline that:
 
-- **Stays invisible** when you're nowhere near a limit (dim grey dot)
-- **Warns early** when projection approaches the block ceiling (yellow)
-- **Shouts** when you're going to exceed the block (bold red 🔥)
-- **Shows the moment things change** with a trend arrow (↑ / ⇈ / ↓)
+- **Stays invisible** when you're nowhere near a limit (dim grey text)
+- **Warns early** when projection approaches the block ceiling (🟡 yellow)
+- **Shouts** when you're going to exceed the block (🔥 bold red)
 
 No dollar amounts — you're paying a subscription, not per-token. The metric is % of your own calibrated block ceiling.
 
@@ -18,14 +17,14 @@ No dollar amounts — you're paying a subscription, not per-token. The metric is
 ![claude-burn statusline](docs/statusline.png)
 
 ```
-● block 15→32% →       # dim grey — quiet, plenty of headroom
-● block 25→74% ↑       # green    — normal, pace increasing
-● block 58→98% ⇈       # yellow   — close to ceiling
-🔥 block 72→148% ⇈     # bold red — will exceed block limit
+   15% → 32%      # dim grey — quiet, plenty of headroom
+🟢 45% → 74%      # green    — normal
+🟡 58% → 98%      # yellow   — close to ceiling
+🔥 72% → 148%     # bold red — will exceed block limit
 ```
 
-- **block X→Y%** — tokens used **so far → projected end-of-block** in the current 5-hour window, as % of your calibrated block ceiling
-- **trend arrow** — change in projection vs previous tick: `→` stable, `↑` rising (+5–15%), `⇈` spike (≥+15%), `↓` falling (≤−5%)
+- **X%** — tokens used so far in the current 5-hour block, as % of your calibrated block ceiling
+- **→ Y%** — projected % by end of block if current pace continues
 
 > **Weekly limits** (All models / Sonnet / Design) are separate Anthropic-side caps, partially invisible to local logs — webapp and mobile usage isn't captured by `ccusage`. Check Claude settings → Usage directly for those.
 
@@ -111,8 +110,7 @@ All knobs are environment variables.
 
 1. Calls `ccusage blocks --json --active --offline --token-limit max` in the **background**, once per `BURN_MAX_AGE` seconds. Result is cached.
 2. Parses block data to compute `current %` (tokens so far) and `projected %` (extrapolated to end of block).
-3. Appends the projection % to a rolling history file and diffs against the previous sample for the trend arrow.
-4. Prints one ANSI-coloured line.
+3. Prints one ANSI-coloured line with emoji indicator.
 
 Statusline invocations are **non-blocking**: the first call after a cache expires returns stale data immediately and kicks the refresh in the background.
 

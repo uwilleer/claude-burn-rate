@@ -26,17 +26,16 @@ USAGE:
   claude-burn --help               show this help
 
 OUTPUT:
-  <dot> block X→Y% <trend>
+  X% → Y%
 
-  X%  — tokens used in the current 5-hour block (% of calibrated ceiling)
+  X%  — tokens used so far in the current 5-hour block (% of calibrated ceiling)
   Y%  — projected % by end of block if current pace continues
-  trend — · (first tick), → (stable), ↑ (rising), ⇈ (spike), ↓ (falling)
 
-COLOURS:
-  dim grey    — projection < 60%   (quiet, plenty of headroom)
-  green       — 60–90%             (normal)
-  yellow      — 90–110%            (close to ceiling)
-  bold red 🔥 — > 110%             (will exceed block limit)
+INDICATORS:
+  (dim grey)  — projection < 60%   (quiet, plenty of headroom)
+  🟢          — 60–90%             (normal)
+  🟡          — 90–110%            (close to ceiling)
+  🔥          — > 110%             (will exceed block limit)
 
 ENVIRONMENT:
   BURN_CACHE_DIR     where cache + history + limit file live
