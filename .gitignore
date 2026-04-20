@@ -1,0 +1,4 @@
+burn-cache.json
+burn-history
+*.tmp
+.DS_Store

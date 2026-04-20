@@ -1,0 +1,134 @@
+#!/bin/sh
+# claude-burn — minimalist block-usage indicator for Claude Code.
+#
+# Shows projected usage of your current 5-hour block as a percentage of your
+# historical maximum (which represents your actual Claude Max plan ceiling).
+# Designed to be invoked from Claude Code's statusLine hook.
+#
+# Dependencies: ccusage (https://github.com/ryoppippi/ccusage), jq.
+
+set -eu
+
+VERSION="0.1.0"
+
+usage() {
+  cat <<EOF
+claude-burn v${VERSION} — Claude Code burn-rate indicator
+
+USAGE:
+  claude-burn            print a single statusline-ready line
+  claude-burn --version  print version
+  claude-burn --help     show this help
+
+OUTPUT:
+  <dot> block: X% · projection Y% <trend>  [Hh Mm to reset]
+
+  X%  — tokens used in the current 5-hour block (% of historical max)
+  Y%  — projected % by end of block if current pace continues
+  trend — · (first tick), → (stable), ↑ (rising), ⇈ (spike), ↓ (falling)
+
+COLOURS:
+  dim grey   — projection < 60%  (quiet, plenty of headroom)
+  green      — 60–90%            (normal)
+  yellow     — 90–110%            (close to ceiling)
+  bold red 🔥 — > 110%            (will exceed block limit)
+
+ENVIRONMENT:
+  BURN_CACHE_DIR   where cache + history live (default: \$HOME/.claude)
+  BURN_MAX_AGE     cache TTL seconds (default: 30)
+  BURN_GREEN_MAX   upper bound for green (default: 60)
+  BURN_YELLOW_MAX  upper bound for yellow (default: 90)
+  BURN_RED_MAX     upper bound for red (default: 110)
+
+FILES:
+  \$BURN_CACHE_DIR/burn-cache.json     cached ccusage output
+  \$BURN_CACHE_DIR/burn-history        last ≤100 projection samples
+
+INTEGRATION:
+  Add to ~/.claude/settings.json:
+    "statusLine": { "type": "command", "command": "claude-burn" }
+
+  Or append to an existing statusline script — this tool prints exactly one line.
+EOF
+}
+
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+  -v|--version) echo "$VERSION"; exit 0 ;;
+esac
+
+for dep in ccusage jq; do
+  command -v "$dep" >/dev/null 2>&1 || {
+    echo "claude-burn: missing dependency: $dep" >&2
+    exit 1
+  }
+done
+
+CACHE_DIR="${BURN_CACHE_DIR:-$HOME/.claude}"
+CACHE="$CACHE_DIR/burn-cache.json"
+HIST="$CACHE_DIR/burn-history"
+MAX_AGE="${BURN_MAX_AGE:-30}"
+GREEN_MAX="${BURN_GREEN_MAX:-60}"
+YELLOW_MAX="${BURN_YELLOW_MAX:-90}"
+RED_MAX="${BURN_RED_MAX:-110}"
+
+mkdir -p "$CACHE_DIR"
+
+now=$(date +%s)
+mtime=0
+if [ -f "$CACHE" ]; then
+  mtime=$(stat -f %m "$CACHE" 2>/dev/null || stat -c %Y "$CACHE" 2>/dev/null || echo 0)
+fi
+age=$((now - mtime))
+
+if [ ! -f "$CACHE" ] || [ "$age" -gt "$MAX_AGE" ]; then
+  (ccusage blocks --json --active --offline --token-limit max > "$CACHE.tmp" 2>/dev/null \
+    && mv "$CACHE.tmp" "$CACHE") >/dev/null 2>&1 &
+fi
+
+[ ! -f "$CACHE" ] && exit 0
+
+parsed=$(jq -r '[
+  ((.blocks[0].totalTokens // 0) * 100 / (.blocks[0].tokenLimitStatus.limit // 1)),
+  (.blocks[0].tokenLimitStatus.percentUsed // 0),
+  (.blocks[0].projection.remainingMinutes // 0)
+] | @tsv' "$CACHE" 2>/dev/null) || exit 0
+
+[ -z "$parsed" ] && exit 0
+
+IFS='	' read -r pct_current pct_proj rem_min <<EOF
+$parsed
+EOF
+
+pct_cur_int=$(printf "%.0f" "$pct_current")
+pct_proj_int=$(printf "%.0f" "$pct_proj")
+rem_min_int=${rem_min%.*}
+rem_h=$((rem_min_int / 60))
+rem_m=$((rem_min_int % 60))
+
+touch "$HIST"
+prev_pct=$(awk 'END {print $2}' "$HIST" 2>/dev/null || echo "")
+printf '%s %s\n' "$now" "$pct_proj_int" >> "$HIST"
+
+hist_lines=$(wc -l < "$HIST" 2>/dev/null | tr -d ' ')
+if [ -n "$hist_lines" ] && [ "$hist_lines" -gt 100 ]; then
+  tail -n 100 "$HIST" > "$HIST.tmp" && mv "$HIST.tmp" "$HIST"
+fi
+
+arrow="·"
+if [ -n "$prev_pct" ] && [ "$prev_pct" -gt 0 ] 2>/dev/null; then
+  delta=$((pct_proj_int - prev_pct))
+  if   [ "$delta" -ge 15 ]; then arrow="⇈"
+  elif [ "$delta" -ge 5 ];  then arrow="↑"
+  elif [ "$delta" -le -5 ]; then arrow="↓"
+  else                           arrow="→"
+  fi
+fi
+
+if   [ "$pct_proj_int" -lt "$GREEN_MAX" ];  then color="\033[2;37m"; dot="●"; detail=""
+elif [ "$pct_proj_int" -lt "$YELLOW_MAX" ]; then color="\033[0;32m"; dot="●"; detail=""
+elif [ "$pct_proj_int" -lt "$RED_MAX" ];    then color="\033[0;33m"; dot="●"; detail="  ${rem_h}h${rem_m}m to reset"
+else                                             color="\033[1;31m"; dot="🔥"; detail="  ${rem_h}h${rem_m}m to reset"
+fi
+
+printf "${color}${dot} block: ${pct_cur_int}%% · projection ${pct_proj_int}%% ${arrow}${detail}\033[0m\n"
