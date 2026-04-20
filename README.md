@@ -69,14 +69,31 @@ claude-burn
 
 `claude-burn` prints exactly one line and exits.
 
+## Calibration (important)
+
+`ccusage` does not know your Claude Max plan's real block ceiling — it approximates with the **historical maximum** of your past blocks, which can drift from the real limit (if you ever used pay-per-use API, or your plan changed). The first time you install, the indicator may disagree with what Claude's UI shows.
+
+**To align:**
+
+1. Open Claude settings → Usage. Note the "Current session" percentage used.
+2. Run:
+   ```sh
+   claude-burn calibrate 45    # replace 45 with the % Claude UI shows
+   ```
+
+This writes a saved limit to `$BURN_CACHE_DIR/burn-limit`. Every subsequent tick uses that value. Re-run whenever the UI and the indicator drift apart (rare — typically only if your plan changes).
+
+Alternative: if you know your plan's exact per-block token ceiling, set `BURN_BLOCK_LIMIT=<tokens>` in your environment. It takes precedence over the calibrated file.
+
 ## Configuration
 
-All knobs are environment variables — set them in your shell or in the wrapping script.
+All knobs are environment variables.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `BURN_CACHE_DIR` | `$HOME/.claude` | Where `burn-cache.json` and `burn-history` live |
+| `BURN_CACHE_DIR` | `$HOME/.claude` | Where the cache, history, and calibrated limit file live |
 | `BURN_MAX_AGE` | `30` | Cache TTL in seconds (stale-while-revalidate) |
+| `BURN_BLOCK_LIMIT` | unset | Explicit block token limit. Overrides calibration and ccusage's historical max. |
 | `BURN_GREEN_MAX` | `60` | Upper bound of the green band (% of block) |
 | `BURN_YELLOW_MAX` | `90` | Upper bound of the yellow band |
 | `BURN_RED_MAX` | `110` | Upper bound of bold red without 🔥 |

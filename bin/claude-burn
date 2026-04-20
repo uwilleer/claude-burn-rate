@@ -9,16 +9,19 @@
 
 set -eu
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 
 usage() {
   cat <<EOF
 claude-burn v${VERSION} — Claude Code burn-rate indicator
 
 USAGE:
-  claude-burn            print a single statusline-ready line
-  claude-burn --version  print version
-  claude-burn --help     show this help
+  claude-burn                 print a single statusline-ready line
+  claude-burn calibrate <N>   calibrate block limit from Claude's UI percent
+                              (open Claude settings, copy the "used" % for
+                              the current 5h session, pass it as N)
+  claude-burn --version       print version
+  claude-burn --help          show this help
 
 OUTPUT:
   <dot> block: X% · projection Y% <trend>  [Hh Mm to reset]
@@ -34,15 +37,34 @@ COLOURS:
   bold red 🔥 — > 110%            (will exceed block limit)
 
 ENVIRONMENT:
-  BURN_CACHE_DIR   where cache + history live (default: \$HOME/.claude)
-  BURN_MAX_AGE     cache TTL seconds (default: 30)
-  BURN_GREEN_MAX   upper bound for green (default: 60)
-  BURN_YELLOW_MAX  upper bound for yellow (default: 90)
-  BURN_RED_MAX     upper bound for red (default: 110)
+  BURN_CACHE_DIR     where cache + history + limit file live
+                     (default: \$HOME/.claude)
+  BURN_MAX_AGE       cache TTL seconds (default: 30)
+  BURN_BLOCK_LIMIT   explicit block limit in tokens. Overrides both the
+                     calibrated file and ccusage's --token-limit max.
+                     Set this if you know your plan's exact per-block
+                     token ceiling.
+  BURN_GREEN_MAX     upper bound for green (default: 60)
+  BURN_YELLOW_MAX    upper bound for yellow (default: 90)
+  BURN_RED_MAX       upper bound for red (default: 110)
 
 FILES:
   \$BURN_CACHE_DIR/burn-cache.json     cached ccusage output
   \$BURN_CACHE_DIR/burn-history        last ≤100 projection samples
+  \$BURN_CACHE_DIR/burn-limit          calibrated block token limit
+
+CALIBRATION:
+  ccusage by itself does not know your Claude Max plan's real block
+  ceiling — it approximates with the historical maximum of your past
+  blocks, which may be higher or lower than the real limit. To align
+  with what Claude's UI shows:
+
+    1. Open Claude settings → Usage, note the "Current session" % used
+    2. Run: claude-burn calibrate <that-percent>
+
+  This writes \$BURN_CACHE_DIR/burn-limit. The indicator will use that
+  value from then on. Re-run calibration any time the UI and indicator
+  drift apart.
 
 INTEGRATION:
   Add to ~/.claude/settings.json:
@@ -52,9 +74,40 @@ INTEGRATION:
 EOF
 }
 
+CACHE_DIR="${BURN_CACHE_DIR:-$HOME/.claude}"
+CACHE="$CACHE_DIR/burn-cache.json"
+HIST="$CACHE_DIR/burn-history"
+LIMIT_FILE="$CACHE_DIR/burn-limit"
+MAX_AGE="${BURN_MAX_AGE:-30}"
+GREEN_MAX="${BURN_GREEN_MAX:-60}"
+YELLOW_MAX="${BURN_YELLOW_MAX:-90}"
+RED_MAX="${BURN_RED_MAX:-110}"
+
+calibrate() {
+  pct="$1"
+  case "$pct" in ''|*[!0-9.]*) echo "claude-burn: calibrate: expected a numeric percent, got '$pct'" >&2; exit 2 ;; esac
+  command -v ccusage >/dev/null 2>&1 || { echo "claude-burn: ccusage not found" >&2; exit 1; }
+  command -v jq >/dev/null 2>&1 || { echo "claude-burn: jq not found" >&2; exit 1; }
+
+  mkdir -p "$CACHE_DIR"
+  total=$(ccusage blocks --json --active --offline 2>/dev/null \
+    | jq -r '.blocks[0].totalTokens // 0')
+
+  if [ -z "$total" ] || [ "$total" = "0" ] || [ "$total" = "null" ]; then
+    echo "claude-burn: no active block found — start a session first, then re-run calibrate" >&2
+    exit 1
+  fi
+
+  limit=$(awk -v t="$total" -v p="$pct" 'BEGIN { printf "%d", t / (p / 100) }')
+  printf '%s\n' "$limit" > "$LIMIT_FILE"
+  echo "Calibrated: current block uses ${total} tokens = ${pct}%"
+  echo "  → saved limit ${limit} tokens to ${LIMIT_FILE}"
+}
+
 case "${1:-}" in
   -h|--help) usage; exit 0 ;;
   -v|--version) echo "$VERSION"; exit 0 ;;
+  calibrate) shift; [ $# -eq 1 ] || { echo "usage: claude-burn calibrate <percent>" >&2; exit 2; }; calibrate "$1"; exit 0 ;;
 esac
 
 for dep in ccusage jq; do
@@ -64,15 +117,15 @@ for dep in ccusage jq; do
   }
 done
 
-CACHE_DIR="${BURN_CACHE_DIR:-$HOME/.claude}"
-CACHE="$CACHE_DIR/burn-cache.json"
-HIST="$CACHE_DIR/burn-history"
-MAX_AGE="${BURN_MAX_AGE:-30}"
-GREEN_MAX="${BURN_GREEN_MAX:-60}"
-YELLOW_MAX="${BURN_YELLOW_MAX:-90}"
-RED_MAX="${BURN_RED_MAX:-110}"
-
 mkdir -p "$CACHE_DIR"
+
+# Resolve effective block limit: env > calibrated file > ccusage historical max
+override_limit=""
+if [ -n "${BURN_BLOCK_LIMIT:-}" ]; then
+  override_limit="$BURN_BLOCK_LIMIT"
+elif [ -f "$LIMIT_FILE" ]; then
+  override_limit=$(cat "$LIMIT_FILE" 2>/dev/null | tr -d '[:space:]')
+fi
 
 now=$(date +%s)
 mtime=0
@@ -88,11 +141,20 @@ fi
 
 [ ! -f "$CACHE" ] && exit 0
 
-parsed=$(jq -r '[
-  ((.blocks[0].totalTokens // 0) * 100 / (.blocks[0].tokenLimitStatus.limit // 1)),
-  (.blocks[0].tokenLimitStatus.percentUsed // 0),
-  (.blocks[0].projection.remainingMinutes // 0)
-] | @tsv' "$CACHE" 2>/dev/null) || exit 0
+parsed=$(jq -r --arg override "$override_limit" '
+  .blocks[0] as $b
+  | ($b.totalTokens // 0) as $total
+  | ($b.projection.totalTokens // $total) as $proj_total
+  | (if ($override | length) > 0 and ($override | tonumber) > 0
+       then ($override | tonumber)
+       else ($b.tokenLimitStatus.limit // 1)
+     end) as $limit
+  | [
+      ($total * 100 / $limit),
+      ($proj_total * 100 / $limit),
+      ($b.projection.remainingMinutes // 0)
+    ] | @tsv
+' "$CACHE" 2>/dev/null) || exit 0
 
 [ -z "$parsed" ] && exit 0
 
