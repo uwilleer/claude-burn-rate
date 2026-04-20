@@ -77,13 +77,17 @@ claude-burn
 
 **To align:**
 
-1. Open Claude settings → Usage. Note the "Current session" percentage used.
+1. Open Claude settings → Usage. Note **two** numbers for the current session:
+   - percentage used (e.g. `57%`)
+   - remaining time (e.g. `1 hr 26 min`)
 2. Run:
    ```sh
-   claude-burn calibrate 45    # replace 45 with the % Claude UI shows
+   claude-burn calibrate 57 1h26m
    ```
 
-This writes a saved limit to `$BURN_CACHE_DIR/burn-limit`. Every subsequent tick uses that value. Re-run whenever the UI and the indicator drift apart (rare — typically only if your plan changes).
+This writes the block token ceiling **and** the offset between ccusage's locally-reconstructed block end and Claude's real block end to `$BURN_CACHE_DIR/burn-limit`. Without the time offset, projections silently inflate (e.g. `projection 180%` when you'd actually land at `106%`), because the projection formula multiplies your burn rate by how long is left in the block — and ccusage's idea of "how long" can be off by 1–2 hours.
+
+Re-run calibration whenever the two numbers drift apart. You'll know it's time if the indicator's projection keeps going up even though the Claude UI says you'll easily make it to reset.
 
 Alternative: if you know your plan's exact per-block token ceiling, set `BURN_BLOCK_LIMIT=<tokens>` in your environment. It takes precedence over the calibrated file.
 

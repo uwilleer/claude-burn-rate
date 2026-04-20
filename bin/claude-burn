@@ -9,19 +9,21 @@
 
 set -eu
 
-VERSION="0.2.1"
+VERSION="0.3.0"
 
 usage() {
   cat <<EOF
 claude-burn v${VERSION} — Claude Code burn-rate indicator
 
 USAGE:
-  claude-burn                 print a single statusline-ready line
-  claude-burn calibrate <N>   calibrate block limit from Claude's UI percent
-                              (open Claude settings, copy the "used" % for
-                              the current 5h session, pass it as N)
-  claude-burn --version       print version
-  claude-burn --help          show this help
+  claude-burn                      print a single statusline-ready line
+  claude-burn calibrate <P> <T>    calibrate from Claude's UI — P is the
+                                   "used" percent of the current session,
+                                   T is the remaining time (e.g. "1h26m",
+                                   "86m", "86"). Both are shown in
+                                   Claude settings → Usage.
+  claude-burn --version            print version
+  claude-burn --help               show this help
 
 OUTPUT:
   <dot> block: X% · projection Y% <trend>  [Hh Mm to reset]
@@ -83,15 +85,33 @@ GREEN_MAX="${BURN_GREEN_MAX:-60}"
 YELLOW_MAX="${BURN_YELLOW_MAX:-90}"
 RED_MAX="${BURN_RED_MAX:-110}"
 
+parse_duration() {
+  # Accept "1h26m", "26m", "86", "1h" → output minutes.
+  s="$1"
+  case "$s" in
+    *h*m*) h=${s%%h*}; rest=${s#*h}; m=${rest%m*}; echo $((h * 60 + m)) ;;
+    *h)    h=${s%h};                                 echo $((h * 60)) ;;
+    *m)    m=${s%m};                                 echo "$m" ;;
+    *[!0-9]*) echo "" ;;
+    *)     echo "$s" ;;
+  esac
+}
+
 calibrate() {
   pct="$1"
-  case "$pct" in ''|*[!0-9.]*) echo "claude-burn: calibrate: expected a numeric percent, got '$pct'" >&2; exit 2 ;; esac
+  rem_input="$2"
+  case "$pct" in ''|*[!0-9.]*) echo "claude-burn: calibrate: expected numeric percent, got '$pct'" >&2; exit 2 ;; esac
+  real_rem=$(parse_duration "$rem_input")
+  case "$real_rem" in ''|*[!0-9]*) echo "claude-burn: calibrate: unrecognised duration '$rem_input' — use e.g. '1h26m', '86m', '86'" >&2; exit 2 ;; esac
+
   command -v ccusage >/dev/null 2>&1 || { echo "claude-burn: ccusage not found" >&2; exit 1; }
   command -v jq >/dev/null 2>&1 || { echo "claude-burn: jq not found" >&2; exit 1; }
 
   mkdir -p "$CACHE_DIR"
-  total=$(ccusage blocks --json --active --offline 2>/dev/null \
-    | jq -r '.blocks[0].totalTokens // 0')
+  cc=$(ccusage blocks --json --active --offline 2>/dev/null)
+  total=$(printf '%s' "$cc" | jq -r '.blocks[0].totalTokens // 0')
+  cc_rem=$(printf '%s' "$cc" | jq -r '.blocks[0].projection.remainingMinutes // 0')
+  cc_rem_int=${cc_rem%.*}
 
   if [ -z "$total" ] || [ "$total" = "0" ] || [ "$total" = "null" ]; then
     echo "claude-burn: no active block found — start a session first, then re-run calibrate" >&2
@@ -99,15 +119,23 @@ calibrate() {
   fi
 
   limit=$(awk -v t="$total" -v p="$pct" 'BEGIN { printf "%d", t / (p / 100) }')
-  printf '%s\n' "$limit" > "$LIMIT_FILE"
-  echo "Calibrated: current block uses ${total} tokens = ${pct}%"
-  echo "  → saved limit ${limit} tokens to ${LIMIT_FILE}"
+  offset=$((cc_rem_int - real_rem))
+
+  {
+    printf 'LIMIT=%s\n' "$limit"
+    printf 'OFFSET_MIN=%s\n' "$offset"
+  } > "$LIMIT_FILE"
+
+  echo "Calibrated:"
+  echo "  tokens used: $total = ${pct}%  → limit ${limit}"
+  echo "  ccusage says ${cc_rem_int}m remain; Claude UI says ${real_rem}m → offset ${offset}m"
+  echo "  saved to ${LIMIT_FILE}"
 }
 
 case "${1:-}" in
   -h|--help) usage; exit 0 ;;
   -v|--version) echo "$VERSION"; exit 0 ;;
-  calibrate) shift; [ $# -eq 1 ] || { echo "usage: claude-burn calibrate <percent>" >&2; exit 2; }; calibrate "$1"; exit 0 ;;
+  calibrate) shift; [ $# -eq 2 ] || { echo "usage: claude-burn calibrate <percent> <remaining-time>" >&2; exit 2; }; calibrate "$1" "$2"; exit 0 ;;
 esac
 
 for dep in ccusage jq; do
@@ -119,13 +147,21 @@ done
 
 mkdir -p "$CACHE_DIR"
 
-# Resolve effective block limit: env > calibrated file > ccusage historical max
+# Resolve effective block limit + reset-time offset from calibration.
+# Env vars take precedence over the calibrated file.
 override_limit=""
-if [ -n "${BURN_BLOCK_LIMIT:-}" ]; then
-  override_limit="$BURN_BLOCK_LIMIT"
-elif [ -f "$LIMIT_FILE" ]; then
-  override_limit=$(cat "$LIMIT_FILE" 2>/dev/null | tr -d '[:space:]')
+offset_min=0
+if [ -f "$LIMIT_FILE" ]; then
+  # Support legacy single-line files (just the limit) and new KEY=value format.
+  while IFS='=' read -r k v; do
+    case "$k" in
+      LIMIT) override_limit="$v" ;;
+      OFFSET_MIN) offset_min="$v" ;;
+      *) [ -z "$override_limit" ] && override_limit=$(printf '%s' "$k" | tr -d '[:space:]') ;;
+    esac
+  done < "$LIMIT_FILE"
 fi
+[ -n "${BURN_BLOCK_LIMIT:-}" ] && override_limit="$BURN_BLOCK_LIMIT"
 
 now=$(date +%s)
 mtime=0
@@ -141,18 +177,21 @@ fi
 
 [ ! -f "$CACHE" ] && exit 0
 
-parsed=$(jq -r --arg override "$override_limit" '
+parsed=$(jq -r --arg override "$override_limit" --argjson offset "${offset_min:-0}" '
   .blocks[0] as $b
   | ($b.totalTokens // 0) as $total
-  | ($b.projection.totalTokens // $total) as $proj_total
+  | ($b.burnRate.tokensPerMinute // 0) as $tpm
+  | ($b.projection.remainingMinutes // 0) as $cc_rem
   | (if ($override | length) > 0 and ($override | tonumber) > 0
        then ($override | tonumber)
        else ($b.tokenLimitStatus.limit // 1)
      end) as $limit
+  | (if ($cc_rem - $offset) < 0 then 0 else ($cc_rem - $offset) end) as $real_rem
+  | ($total + $tpm * $real_rem) as $proj_total
   | [
       ($total * 100 / $limit),
       ($proj_total * 100 / $limit),
-      ($b.projection.remainingMinutes // 0)
+      $real_rem
     ] | @tsv
 ' "$CACHE" 2>/dev/null) || exit 0
 
