@@ -11,22 +11,23 @@ Claude Max meters usage in **rolling 5-hour blocks**. The official UI surfaces t
 - **Shouts** when you're going to exceed the block (bold red 🔥)
 - **Shows the moment things change** with a trend arrow (↑ / ⇈ / ↓)
 
-No dollar amounts — you're paying a subscription, not per-token. The metric is % of your own historical block ceiling (what `ccusage --token-limit max` calls your "limit").
+No dollar amounts — you're paying a subscription, not per-token. The metric is % of your own calibrated block ceiling.
 
 ## How it looks
 
 ![claude-burn statusline](docs/statusline.png)
 
 ```
-● block: 15% · projection 32% →       # dim grey — quiet
-● block: 25% · projection 74% ↑       # green    — normal
-● block: 58% · projection 98% ⇈       # yellow   — close to ceiling
-🔥 block: 72% · projection 148% ⇈     # bold red — will exceed
+● block 15→32% →       # dim grey — quiet, plenty of headroom
+● block 25→74% ↑       # green    — normal, pace increasing
+● block 58→98% ⇈       # yellow   — close to ceiling
+🔥 block 72→148% ⇈     # bold red — will exceed block limit
 ```
 
-- **block: X%** — tokens used so far in the current 5-hour block, as % of your calibrated block limit
-- **projection Y%** — extrapolation to end of block at current pace
-- **trend** — vs previous tick: `→` stable, `↑` rising (+5–15%), `⇈` spike (≥+15%), `↓` falling (−5% or more)
+- **block X→Y%** — tokens used **so far → projected end-of-block** in the current 5-hour window, as % of your calibrated block ceiling
+- **trend arrow** — change in projection vs previous tick: `→` stable, `↑` rising (+5–15%), `⇈` spike (≥+15%), `↓` falling (≤−5%)
+
+> **Weekly limits** (All models / Sonnet / Design) are separate Anthropic-side caps, partially invisible to local logs — webapp and mobile usage isn't captured by `ccusage`. Check Claude settings → Usage directly for those.
 
 > **A note on accuracy.** `ccusage` reconstructs the 5-hour window from your local Claude Code JSONL logs — so "when does this block reset" is a local estimate, not what the Claude server actually uses. That's why this tool **does not display a countdown**: open Claude's settings → Usage for the real reset time. The block % and projection, once calibrated, tend to match Claude's UI within a few points.
 
@@ -87,7 +88,7 @@ claude-burn
    claude-burn calibrate 57 1h26m
    ```
 
-This writes the block token ceiling **and** the offset between ccusage's locally-reconstructed block end and Claude's real block end to `$BURN_CACHE_DIR/burn-limit`. Without the time offset, projections silently inflate (e.g. `projection 180%` when you'd actually land at `106%`), because the projection formula multiplies your burn rate by how long is left in the block — and ccusage's idea of "how long" can be off by 1–2 hours.
+This writes the block token ceiling **and** the offset between ccusage's locally-reconstructed block end and Claude's real block end to `$BURN_CACHE_DIR/burn-limit`. Without the time offset, projections silently inflate (e.g. `block 25→180%` when you'd actually land at `106%`), because the projection formula multiplies your burn rate by how long is left in the block — and ccusage's idea of "how long" can be off by 1–2 hours.
 
 Re-run calibration whenever the two numbers drift apart. You'll know it's time if the indicator's projection keeps going up even though the Claude UI says you'll easily make it to reset.
 
@@ -109,11 +110,11 @@ All knobs are environment variables.
 ## How it works
 
 1. Calls `ccusage blocks --json --active --offline --token-limit max` in the **background**, once per `BURN_MAX_AGE` seconds. Result is cached.
-2. Parses `blocks[0].tokenLimitStatus.percentUsed` (projected %) and `totalTokens / limit` (current %).
+2. Parses block data to compute `current %` (tokens so far) and `projected %` (extrapolated to end of block).
 3. Appends the projection % to a rolling history file and diffs against the previous sample for the trend arrow.
 4. Prints one ANSI-coloured line.
 
-Statusline invocations are **non-blocking**: the first call after 30 s of inactivity returns stale data immediately and kicks the refresh in the background.
+Statusline invocations are **non-blocking**: the first call after a cache expires returns stale data immediately and kicks the refresh in the background.
 
 ## Performance
 

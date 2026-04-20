@@ -2,14 +2,14 @@
 # claude-burn — minimalist block-usage indicator for Claude Code.
 #
 # Shows projected usage of your current 5-hour block as a percentage of your
-# historical maximum (which represents your actual Claude Max plan ceiling).
-# Designed to be invoked from Claude Code's statusLine hook.
+# calibrated block ceiling. Designed to be invoked from Claude Code's
+# statusLine hook.
 #
 # Dependencies: ccusage (https://github.com/ryoppippi/ccusage), jq.
 
 set -eu
 
-VERSION="0.3.0"
+VERSION="0.4.0"
 
 usage() {
   cat <<EOF
@@ -26,22 +26,22 @@ USAGE:
   claude-burn --help               show this help
 
 OUTPUT:
-  <dot> block: X% · projection Y% <trend>  [Hh Mm to reset]
+  <dot> block X→Y% <trend>
 
-  X%  — tokens used in the current 5-hour block (% of historical max)
+  X%  — tokens used in the current 5-hour block (% of calibrated ceiling)
   Y%  — projected % by end of block if current pace continues
   trend — · (first tick), → (stable), ↑ (rising), ⇈ (spike), ↓ (falling)
 
 COLOURS:
-  dim grey   — projection < 60%  (quiet, plenty of headroom)
-  green      — 60–90%            (normal)
-  yellow     — 90–110%            (close to ceiling)
-  bold red 🔥 — > 110%            (will exceed block limit)
+  dim grey    — projection < 60%   (quiet, plenty of headroom)
+  green       — 60–90%             (normal)
+  yellow      — 90–110%            (close to ceiling)
+  bold red 🔥 — > 110%             (will exceed block limit)
 
 ENVIRONMENT:
   BURN_CACHE_DIR     where cache + history + limit file live
                      (default: \$HOME/.claude)
-  BURN_MAX_AGE       cache TTL seconds (default: 30)
+  BURN_MAX_AGE       cache TTL seconds (default: 15)
   BURN_BLOCK_LIMIT   explicit block limit in tokens. Overrides both the
                      calibrated file and ccusage's --token-limit max.
                      Set this if you know your plan's exact per-block
@@ -61,12 +61,21 @@ CALIBRATION:
   blocks, which may be higher or lower than the real limit. To align
   with what Claude's UI shows:
 
-    1. Open Claude settings → Usage, note the "Current session" % used
-    2. Run: claude-burn calibrate <that-percent>
+    1. Open Claude settings → Usage. Note the "Current session" % used
+       and the remaining time.
+    2. Run: claude-burn calibrate <percent> <remaining-time>
 
-  This writes \$BURN_CACHE_DIR/burn-limit. The indicator will use that
-  value from then on. Re-run calibration any time the UI and indicator
-  drift apart.
+  This writes the block token ceiling and a time offset to
+  \$BURN_CACHE_DIR/burn-limit. Without the time offset, projections
+  silently inflate because ccusage's idea of "how long is left in the
+  block" can be off by 1–2 hours. Re-run calibration whenever the
+  indicator and Claude UI drift apart.
+
+NOTE ON WEEKLY LIMITS:
+  Claude Max has separate weekly caps (all models, Sonnet-only, Design)
+  that reset on different schedules and are partially invisible to ccusage
+  (webapp/mobile/Design usage is not logged locally). For authoritative
+  weekly numbers, check Claude settings → Usage directly.
 
 INTEGRATION:
   Add to ~/.claude/settings.json:
@@ -86,7 +95,6 @@ YELLOW_MAX="${BURN_YELLOW_MAX:-90}"
 RED_MAX="${BURN_RED_MAX:-110}"
 
 parse_duration() {
-  # Accept "1h26m", "26m", "86", "1h" → output minutes.
   s="$1"
   case "$s" in
     *h*m*) h=${s%%h*}; rest=${s#*h}; m=${rest%m*}; echo $((h * 60 + m)) ;;
@@ -152,10 +160,9 @@ mkdir -p "$CACHE_DIR"
 override_limit=""
 offset_min=0
 if [ -f "$LIMIT_FILE" ]; then
-  # Support legacy single-line files (just the limit) and new KEY=value format.
   while IFS='=' read -r k v; do
     case "$k" in
-      LIMIT) override_limit="$v" ;;
+      LIMIT)      override_limit="$v" ;;
       OFFSET_MIN) offset_min="$v" ;;
       *) [ -z "$override_limit" ] && override_limit=$(printf '%s' "$k" | tr -d '[:space:]') ;;
     esac
@@ -203,9 +210,6 @@ EOF
 
 pct_cur_int=$(printf "%.0f" "$pct_current")
 pct_proj_int=$(printf "%.0f" "$pct_proj")
-rem_min_int=${rem_min%.*}
-rem_h=$((rem_min_int / 60))
-rem_m=$((rem_min_int % 60))
 
 touch "$HIST"
 prev_pct=$(awk 'END {print $2}' "$HIST" 2>/dev/null || echo "")
@@ -216,20 +220,10 @@ if [ -n "$hist_lines" ] && [ "$hist_lines" -gt 100 ]; then
   tail -n 100 "$HIST" > "$HIST.tmp" && mv "$HIST.tmp" "$HIST"
 fi
 
-arrow="·"
-if [ -n "$prev_pct" ] && [ "$prev_pct" -gt 0 ] 2>/dev/null; then
-  delta=$((pct_proj_int - prev_pct))
-  if   [ "$delta" -ge 15 ]; then arrow="⇈"
-  elif [ "$delta" -ge 5 ];  then arrow="↑"
-  elif [ "$delta" -le -5 ]; then arrow="↓"
-  else                           arrow="→"
-  fi
+if   [ "$pct_proj_int" -lt "$GREEN_MAX" ];  then color="\033[2;37m"; prefix="  "
+elif [ "$pct_proj_int" -lt "$YELLOW_MAX" ]; then color="\033[0;32m"; prefix="🟢 "
+elif [ "$pct_proj_int" -lt "$RED_MAX" ];    then color="\033[0;33m"; prefix="🟡 "
+else                                             color="\033[1;31m"; prefix="🔥 "
 fi
 
-if   [ "$pct_proj_int" -lt "$GREEN_MAX" ];  then color="\033[2;37m"; dot="●"
-elif [ "$pct_proj_int" -lt "$YELLOW_MAX" ]; then color="\033[0;32m"; dot="●"
-elif [ "$pct_proj_int" -lt "$RED_MAX" ];    then color="\033[0;33m"; dot="●"
-else                                             color="\033[1;31m"; dot="🔥"
-fi
-
-printf "${color}${dot} block: ${pct_cur_int}%% · projection ${pct_proj_int}%% ${arrow}\033[0m\n"
+printf '%b%s%s%% → %s%%\033[0m\n' "$color" "$prefix" "$pct_cur_int" "$pct_proj_int"
