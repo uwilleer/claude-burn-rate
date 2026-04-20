@@ -15,6 +15,8 @@ No dollar amounts — you're paying a subscription, not per-token. The metric is
 
 ## How it looks
 
+![claude-burn statusline](docs/statusline.png)
+
 ```
 ● block: 15% · projection 32% →       # dim grey — quiet
 ● block: 25% · projection 74% ↑       # green    — normal
