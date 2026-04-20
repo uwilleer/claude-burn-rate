@@ -16,15 +16,17 @@ No dollar amounts — you're paying a subscription, not per-token. The metric is
 ## How it looks
 
 ```
-● block: 15% · projection 32% →                       # dim grey — quiet
-● block: 25% · projection 74% ↑                       # green    — normal
-● block: 58% · projection 98% ⇈  2h15m to reset       # yellow   — close to ceiling
-🔥 block: 72% · projection 148% ⇈  1h42m to reset     # bold red — will exceed
+● block: 15% · projection 32% →       # dim grey — quiet
+● block: 25% · projection 74% ↑       # green    — normal
+● block: 58% · projection 98% ⇈       # yellow   — close to ceiling
+🔥 block: 72% · projection 148% ⇈     # bold red — will exceed
 ```
 
-- **block: X%** — tokens used so far in the current 5-hour block, as % of your historical max block
+- **block: X%** — tokens used so far in the current 5-hour block, as % of your calibrated block limit
 - **projection Y%** — extrapolation to end of block at current pace
 - **trend** — vs previous tick: `→` stable, `↑` rising (+5–15%), `⇈` spike (≥+15%), `↓` falling (−5% or more)
+
+> **A note on accuracy.** `ccusage` reconstructs the 5-hour window from your local Claude Code JSONL logs — so "when does this block reset" is a local estimate, not what the Claude server actually uses. That's why this tool **does not display a countdown**: open Claude's settings → Usage for the real reset time. The block % and projection, once calibrated, tend to match Claude's UI within a few points.
 
 ## Install
 
@@ -92,7 +94,7 @@ All knobs are environment variables.
 | Variable | Default | Meaning |
 |---|---|---|
 | `BURN_CACHE_DIR` | `$HOME/.claude` | Where the cache, history, and calibrated limit file live |
-| `BURN_MAX_AGE` | `30` | Cache TTL in seconds (stale-while-revalidate) |
+| `BURN_MAX_AGE` | `15` | Cache TTL in seconds (stale-while-revalidate) |
 | `BURN_BLOCK_LIMIT` | unset | Explicit block token limit. Overrides calibration and ccusage's historical max. |
 | `BURN_GREEN_MAX` | `60` | Upper bound of the green band (% of block) |
 | `BURN_YELLOW_MAX` | `90` | Upper bound of the yellow band |

@@ -9,7 +9,7 @@
 
 set -eu
 
-VERSION="0.2.0"
+VERSION="0.2.1"
 
 usage() {
   cat <<EOF
@@ -78,7 +78,7 @@ CACHE_DIR="${BURN_CACHE_DIR:-$HOME/.claude}"
 CACHE="$CACHE_DIR/burn-cache.json"
 HIST="$CACHE_DIR/burn-history"
 LIMIT_FILE="$CACHE_DIR/burn-limit"
-MAX_AGE="${BURN_MAX_AGE:-30}"
+MAX_AGE="${BURN_MAX_AGE:-15}"
 GREEN_MAX="${BURN_GREEN_MAX:-60}"
 YELLOW_MAX="${BURN_YELLOW_MAX:-90}"
 RED_MAX="${BURN_RED_MAX:-110}"
@@ -187,10 +187,10 @@ if [ -n "$prev_pct" ] && [ "$prev_pct" -gt 0 ] 2>/dev/null; then
   fi
 fi
 
-if   [ "$pct_proj_int" -lt "$GREEN_MAX" ];  then color="\033[2;37m"; dot="●"; detail=""
-elif [ "$pct_proj_int" -lt "$YELLOW_MAX" ]; then color="\033[0;32m"; dot="●"; detail=""
-elif [ "$pct_proj_int" -lt "$RED_MAX" ];    then color="\033[0;33m"; dot="●"; detail="  ${rem_h}h${rem_m}m to reset"
-else                                             color="\033[1;31m"; dot="🔥"; detail="  ${rem_h}h${rem_m}m to reset"
+if   [ "$pct_proj_int" -lt "$GREEN_MAX" ];  then color="\033[2;37m"; dot="●"
+elif [ "$pct_proj_int" -lt "$YELLOW_MAX" ]; then color="\033[0;32m"; dot="●"
+elif [ "$pct_proj_int" -lt "$RED_MAX" ];    then color="\033[0;33m"; dot="●"
+else                                             color="\033[1;31m"; dot="🔥"
 fi
 
-printf "${color}${dot} block: ${pct_cur_int}%% · projection ${pct_proj_int}%% ${arrow}${detail}\033[0m\n"
+printf "${color}${dot} block: ${pct_cur_int}%% · projection ${pct_proj_int}%% ${arrow}\033[0m\n"
