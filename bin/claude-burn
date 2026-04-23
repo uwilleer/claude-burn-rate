@@ -383,9 +383,8 @@ fi
 BAR_W=17
 
 block_bar=$(render_bar "$pct_cur_int" "$BAR_W" "$block_code")
-block_burn=$(awk -v p="$pct_proj_int" 'BEGIN { printf "%.1f", p / 100 }')
-printf 'Block  %s %3d%% → %4d%% (%4.1f× burn)\n' \
-  "$block_bar" "$pct_cur_int" "$pct_proj_int" "$block_burn"
+printf 'Block  %s %3d%% → %4d%%\n' \
+  "$block_bar" "$pct_cur_int" "$pct_proj_int"
 
 if [ -n "$wc_int" ] && [ -n "$wp_int" ]; then
   if   [ "$wp_int" -lt "$GREEN_MAX" ];  then week_code="[2;37m"
@@ -394,7 +393,6 @@ if [ -n "$wc_int" ] && [ -n "$wp_int" ]; then
   else                                        week_code="[1;31m"
   fi
   week_bar=$(render_bar "$wc_int" "$BAR_W" "$week_code")
-  week_burn=$(awk -v p="$wp_int" 'BEGIN { printf "%.1f", p / 100 }')
-  printf 'Week   %s %3d%% → %4d%% (%4.1f× burn)\n' \
-    "$week_bar" "$wc_int" "$wp_int" "$week_burn"
+  printf 'Week   %s %3d%% → %4d%%\n' \
+    "$week_bar" "$wc_int" "$wp_int"
 fi
