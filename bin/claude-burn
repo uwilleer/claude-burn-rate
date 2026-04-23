@@ -9,7 +9,7 @@
 
 set -eu
 
-VERSION="0.7.0"
+VERSION="0.7.2"
 
 usage() {
   cat <<EOF
@@ -379,10 +379,11 @@ if [ -n "${wp_int:-}" ] && [ "$wp_int" -gt "$max_proj" ]; then
   max_proj=$wp_int
 fi
 
-if   [ "$max_proj" -lt 60 ];  then rec_seg=$(printf ' | \033[2;37mOpus 4.7 max\033[0m')
+if   [ "$max_proj" -lt 40 ];  then rec_seg=$(printf ' | \033[2;37mOpus 4.7 max\033[0m')
+elif [ "$max_proj" -lt 65 ];  then rec_seg=$(printf ' | \033[2;37mOpus 4.7 xhigh\033[0m')
 elif [ "$max_proj" -lt 90 ];  then rec_seg=$(printf ' | \033[0;32mOpus 4.7 high\033[0m')
-elif [ "$max_proj" -lt 110 ]; then rec_seg=$(printf ' | \033[0;32mSonnet 4.6 high\033[0m')
-elif [ "$max_proj" -lt 150 ]; then rec_seg=$(printf ' | \033[0;33mSonnet 4.6 low\033[0m')
+elif [ "$max_proj" -lt 120 ]; then rec_seg=$(printf ' | \033[0;32mSonnet 4.6 high\033[0m')
+elif [ "$max_proj" -lt 170 ]; then rec_seg=$(printf ' | \033[0;33mSonnet 4.6 medium\033[0m')
 else                               rec_seg=$(printf ' | \033[1;31mHaiku 4.5\033[0m')
 fi
 
