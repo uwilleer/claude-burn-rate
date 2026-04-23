@@ -9,50 +9,60 @@
 
 set -eu
 
-VERSION="0.4.0"
+VERSION="0.6.0"
 
 usage() {
   cat <<EOF
 claude-burn v${VERSION} — Claude Code burn-rate indicator
 
 USAGE:
-  claude-burn                      print a single statusline-ready line
-  claude-burn calibrate <P> <T>    calibrate from Claude's UI — P is the
-                                   "used" percent of the current session,
-                                   T is the remaining time (e.g. "1h26m",
-                                   "86m", "86"). Both are shown in
-                                   Claude settings → Usage.
-  claude-burn --version            print version
-  claude-burn --help               show this help
+  claude-burn                           print a single statusline-ready line
+  claude-burn calibrate <P> <T>         calibrate from Claude's UI — P is the
+                                        "used" percent of the current session,
+                                        T is the remaining time (e.g. "1h26m",
+                                        "86m", "86"). Both are shown in
+                                        Claude settings → Usage.
+  claude-burn calibrate-weekly <P> [D]  calibrate weekly limit — P is the
+                                        "used" percent of the weekly cap shown
+                                        in Claude settings → Usage. D is the
+                                        week-start date (YYYY-MM-DD); defaults
+                                        to the most recent Monday.
+  claude-burn --version                 print version
+  claude-burn --help                    show this help
 
 OUTPUT:
-  X% → Y%
+  X% → Y%  [W:A%→B%]
 
   X%  — tokens used so far in the current 5-hour block (% of calibrated ceiling)
   Y%  — projected % by end of block if current pace continues
+  A%  — tokens used so far this week (% of calibrated weekly limit)
+  B%  — projected % by end of week at current pace (only shown after calibrate-weekly)
 
-INDICATORS:
+INDICATORS (apply to both block and weekly projections):
   (dim grey)  — projection < 60%   (quiet, plenty of headroom)
   🟢          — 60–90%             (normal)
   🟡          — 90–110%            (close to ceiling)
-  🔥          — > 110%             (will exceed block limit)
+  🔥          — > 110%             (will exceed limit)
 
 ENVIRONMENT:
-  BURN_CACHE_DIR     where cache + history + limit file live
-                     (default: \$HOME/.claude)
-  BURN_MAX_AGE       cache TTL seconds (default: 15)
-  BURN_BLOCK_LIMIT   explicit block limit in tokens. Overrides both the
-                     calibrated file and ccusage's --token-limit max.
-                     Set this if you know your plan's exact per-block
-                     token ceiling.
-  BURN_GREEN_MAX     upper bound for green (default: 60)
-  BURN_YELLOW_MAX    upper bound for yellow (default: 90)
-  BURN_RED_MAX       upper bound for red (default: 110)
+  BURN_CACHE_DIR       where cache + history + limit files live
+                       (default: \$HOME/.claude)
+  BURN_MAX_AGE         block cache TTL seconds (default: 15)
+  BURN_WEEKLY_MAX_AGE  weekly cache TTL seconds (default: 60)
+  BURN_BLOCK_LIMIT     explicit block limit in tokens. Overrides both the
+                       calibrated file and ccusage's --token-limit max.
+                       Set this if you know your plan's exact per-block
+                       token ceiling.
+  BURN_GREEN_MAX       upper bound for green (default: 60)
+  BURN_YELLOW_MAX      upper bound for yellow (default: 90)
+  BURN_RED_MAX         upper bound for red (default: 110)
 
 FILES:
-  \$BURN_CACHE_DIR/burn-cache.json     cached ccusage output
-  \$BURN_CACHE_DIR/burn-history        last ≤100 projection samples
-  \$BURN_CACHE_DIR/burn-limit          calibrated block token limit
+  \$BURN_CACHE_DIR/burn-cache.json         cached block ccusage output
+  \$BURN_CACHE_DIR/burn-history            last ≤100 projection samples
+  \$BURN_CACHE_DIR/burn-limit              calibrated block token limit
+  \$BURN_CACHE_DIR/burn-weekly-cache.json  cached all-blocks ccusage output
+  \$BURN_CACHE_DIR/burn-weekly             calibrated weekly token limit
 
 CALIBRATION:
   ccusage by itself does not know your Claude Max plan's real block
@@ -70,11 +80,20 @@ CALIBRATION:
   block" can be off by 1–2 hours. Re-run calibration whenever the
   indicator and Claude UI drift apart.
 
-NOTE ON WEEKLY LIMITS:
-  Claude Max has separate weekly caps (all models, Sonnet-only, Design)
-  that reset on different schedules and are partially invisible to ccusage
-  (webapp/mobile/Design usage is not logged locally). For authoritative
-  weekly numbers, check Claude settings → Usage directly.
+WEEKLY CALIBRATION:
+  To track weekly pace against the Claude Max weekly cap:
+
+    1. Open Claude settings → Usage. Note your weekly % used.
+    2. Run: claude-burn calibrate-weekly <percent> [YYYY-MM-DD]
+
+  The optional date is the Monday (or reset day) that started the current
+  week. Defaults to the most recent Monday. After calibration, the
+  statusline shows W:A%→B% — current weekly usage and projected
+  end-of-week usage. The week advances automatically every 7 days.
+
+  NOTE: ccusage only sees CLI usage. Webapp/mobile/Design usage is not
+  logged locally, so weekly totals may be lower than Claude's UI shows.
+  Re-calibrate whenever the indicator and Claude UI drift apart.
 
 INTEGRATION:
   Add to ~/.claude/settings.json:
@@ -88,7 +107,10 @@ CACHE_DIR="${BURN_CACHE_DIR:-$HOME/.claude}"
 CACHE="$CACHE_DIR/burn-cache.json"
 HIST="$CACHE_DIR/burn-history"
 LIMIT_FILE="$CACHE_DIR/burn-limit"
+WEEKLY_CACHE="$CACHE_DIR/burn-weekly-cache.json"
+WEEKLY_LIMIT_FILE="$CACHE_DIR/burn-weekly"
 MAX_AGE="${BURN_MAX_AGE:-15}"
+WEEKLY_MAX_AGE="${BURN_WEEKLY_MAX_AGE:-60}"
 GREEN_MAX="${BURN_GREEN_MAX:-60}"
 YELLOW_MAX="${BURN_YELLOW_MAX:-90}"
 RED_MAX="${BURN_RED_MAX:-110}"
@@ -139,10 +161,55 @@ calibrate() {
   echo "  saved to ${LIMIT_FILE}"
 }
 
+calibrate_weekly() {
+  pct="$1"
+  week_start_input="${2:-}"
+  case "$pct" in ''|*[!0-9.]*) echo "claude-burn: calibrate-weekly: expected numeric percent, got '$pct'" >&2; exit 2 ;; esac
+
+  if [ -z "$week_start_input" ]; then
+    dow=$(date +%u)  # 1=Mon…7=Sun (ISO)
+    days_back=$(( dow - 1 ))
+    week_start_input=$(date -v-${days_back}d +%Y-%m-%d 2>/dev/null \
+      || date -d "${days_back} days ago" +%Y-%m-%d 2>/dev/null \
+      || { echo "claude-burn: calibrate-weekly: cannot compute week start — pass YYYY-MM-DD explicitly" >&2; exit 1; })
+  fi
+  case "$week_start_input" in
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) : ;;
+    *) echo "claude-burn: calibrate-weekly: date must be YYYY-MM-DD, got '$week_start_input'" >&2; exit 2 ;;
+  esac
+
+  command -v ccusage >/dev/null 2>&1 || { echo "claude-burn: ccusage not found" >&2; exit 1; }
+  command -v jq >/dev/null 2>&1 || { echo "claude-burn: jq not found" >&2; exit 1; }
+
+  mkdir -p "$CACHE_DIR"
+  raw=$(ccusage blocks --json --offline 2>/dev/null)
+  weekly_tokens=$(printf '%s' "$raw" | jq -r \
+    --arg since "${week_start_input}T00:00:00.000Z" \
+    '[.blocks[] | select(.startTime >= $since) | .totalTokens] | add // 0')
+
+  case "$weekly_tokens" in 0|null|"")
+    echo "claude-burn: calibrate-weekly: no blocks found since $week_start_input — check the date" >&2
+    exit 1 ;;
+  esac
+
+  weekly_limit=$(awk -v t="$weekly_tokens" -v p="$pct" 'BEGIN { printf "%d", t / (p / 100) }')
+
+  {
+    printf 'WEEKLY_LIMIT=%s\n' "$weekly_limit"
+    printf 'WEEK_START=%s\n' "$week_start_input"
+  } > "$WEEKLY_LIMIT_FILE"
+
+  echo "Weekly calibrated:"
+  echo "  tokens this week: $weekly_tokens = ${pct}%  → weekly limit ${weekly_limit}"
+  echo "  week start: $week_start_input"
+  echo "  saved to ${WEEKLY_LIMIT_FILE}"
+}
+
 case "${1:-}" in
   -h|--help) usage; exit 0 ;;
   -v|--version) echo "$VERSION"; exit 0 ;;
   calibrate) shift; [ $# -eq 2 ] || { echo "usage: claude-burn calibrate <percent> <remaining-time>" >&2; exit 2; }; calibrate "$1" "$2"; exit 0 ;;
+  calibrate-weekly) shift; [ $# -ge 1 ] || { echo "usage: claude-burn calibrate-weekly <percent> [YYYY-MM-DD]" >&2; exit 2; }; calibrate_weekly "$1" "${2:-}"; exit 0 ;;
 esac
 
 for dep in ccusage jq; do
@@ -186,14 +253,17 @@ fi
 parsed=$(jq -r --arg override "$override_limit" --argjson offset "${offset_min:-0}" '
   .blocks[0] as $b
   | ($b.totalTokens // 0) as $total
-  | ($b.burnRate.tokensPerMinute // 0) as $tpm
   | ($b.projection.remainingMinutes // 0) as $cc_rem
   | (if ($override | length) > 0 and ($override | tonumber) > 0
        then ($override | tonumber)
        else ($b.tokenLimitStatus.limit // 1)
      end) as $limit
   | (if ($cc_rem - $offset) < 0 then 0 else ($cc_rem - $offset) end) as $real_rem
-  | ($total + $tpm * $real_rem) as $proj_total
+  | (if $real_rem > 300 then 300 else $real_rem end) as $rem_clamp
+  | (300 - $rem_clamp) as $elapsed
+  | (if $elapsed < 30 then 30 else $elapsed end) as $eff_elapsed
+  | ($total / $eff_elapsed) as $smooth_rate
+  | ($total + $smooth_rate * $rem_clamp) as $proj_total
   | [
       ($total * 100 / $limit),
       ($proj_total * 100 / $limit),
@@ -219,10 +289,95 @@ if [ -n "$hist_lines" ] && [ "$hist_lines" -gt 100 ]; then
   tail -n 100 "$HIST" > "$HIST.tmp" && mv "$HIST.tmp" "$HIST"
 fi
 
-if   [ "$pct_proj_int" -lt "$GREEN_MAX" ];  then color="\033[2;37m"; prefix="  "
-elif [ "$pct_proj_int" -lt "$YELLOW_MAX" ]; then color="\033[0;32m"; prefix="🟢 "
-elif [ "$pct_proj_int" -lt "$RED_MAX" ];    then color="\033[0;33m"; prefix="🟡 "
-else                                             color="\033[1;31m"; prefix="🔥 "
+if   [ "$pct_proj_int" -lt "$GREEN_MAX" ];  then color="\033[2;37m"
+elif [ "$pct_proj_int" -lt "$YELLOW_MAX" ]; then color="\033[0;32m"
+elif [ "$pct_proj_int" -lt "$RED_MAX" ];    then color="\033[0;33m"
+else                                             color="\033[1;31m"
+fi
+prefix="Block: "
+
+# --- Weekly indicator (only if calibrated) ---
+weekly_out=""
+if [ -f "$WEEKLY_LIMIT_FILE" ]; then
+  w_limit=""
+  w_start=""
+  while IFS='=' read -r k v; do
+    case "$k" in
+      WEEKLY_LIMIT) w_limit="$v" ;;
+      WEEK_START)   w_start="$v" ;;
+    esac
+  done < "$WEEKLY_LIMIT_FILE"
+
+  if [ -n "$w_limit" ] && [ -n "$w_start" ]; then
+    # Convert week start date to epoch (macOS / Linux)
+    w_epoch=$(date -j -f "%Y-%m-%d" "$w_start" "+%s" 2>/dev/null \
+      || date -d "$w_start" "+%s" 2>/dev/null || echo "")
+
+    if [ -n "$w_epoch" ]; then
+      # Auto-advance week start by 7-day increments (in memory only)
+      w_age=$((now - w_epoch))
+      while [ "$w_age" -gt "$((7 * 86400))" ]; do
+        w_epoch=$((w_epoch + 7 * 86400))
+        w_age=$((now - w_epoch))
+      done
+      w_start=$(date -r "$w_epoch" "+%Y-%m-%d" 2>/dev/null \
+        || date -d "@$w_epoch" "+%Y-%m-%d" 2>/dev/null || echo "$w_start")
+
+      # Refresh weekly cache (background, same pattern as block cache)
+      mtime_w=0
+      [ -f "$WEEKLY_CACHE" ] && \
+        mtime_w=$(stat -f %m "$WEEKLY_CACHE" 2>/dev/null || stat -c %Y "$WEEKLY_CACHE" 2>/dev/null || echo 0)
+      age_w=$((now - mtime_w))
+      if [ ! -f "$WEEKLY_CACHE" ] || [ "$age_w" -gt "$WEEKLY_MAX_AGE" ]; then
+        (ccusage blocks --json --offline > "$WEEKLY_CACHE.tmp" 2>/dev/null \
+          && mv "$WEEKLY_CACHE.tmp" "$WEEKLY_CACHE") >/dev/null 2>&1 &
+      fi
+
+      if [ -f "$WEEKLY_CACHE" ]; then
+        w_parsed=$(jq -r \
+          --arg since "${w_start}T00:00:00.000Z" \
+          --argjson limit "$w_limit" \
+          --argjson now "$now" \
+          --argjson ws "$w_epoch" '
+          [.blocks[] | select(.startTime >= $since) | .totalTokens] | add // 0 |
+          . as $wt |
+          if $wt == 0 then empty else
+            (($now - $ws) / 86400 | if . < 0.01 then 0.01 else . end) as $days |
+            ($wt / $days * 7 / $limit * 100) as $wp |
+            ($wt / $limit * 100) as $wc |
+            [$wc, $wp] | @tsv
+          end
+        ' "$WEEKLY_CACHE" 2>/dev/null) || true
+
+        if [ -n "$w_parsed" ]; then
+          IFS='	' read -r wc wp <<EOF
+$w_parsed
+EOF
+          wc_int=$(printf "%.0f" "$wc")
+          wp_int=$(printf "%.0f" "$wp")
+
+          if   [ "$wp_int" -lt "$GREEN_MAX" ];  then weekly_out=" | \033[2;37mWeek: ${wc_int}%→${wp_int}%\033[0m"
+          elif [ "$wp_int" -lt "$YELLOW_MAX" ]; then weekly_out=" | \033[0;32mWeek: ${wc_int}%→${wp_int}%\033[0m"
+          elif [ "$wp_int" -lt "$RED_MAX" ];    then weekly_out=" | \033[0;33mWeek: ${wc_int}%→${wp_int}%\033[0m"
+          else                                       weekly_out=" | \033[1;31mWeek: ${wc_int}%→${wp_int}%\033[0m"
+          fi
+        fi
+      fi
+    fi
+  fi
 fi
 
-printf '%b%s%s%% → %s%%\033[0m\n' "$color" "$prefix" "$pct_cur_int" "$pct_proj_int"
+# Model + effort recommendation based on max(block_proj, week_proj)
+max_proj=$pct_proj_int
+if [ -n "${wp_int:-}" ] && [ "$wp_int" -gt "$max_proj" ]; then
+  max_proj=$wp_int
+fi
+
+if   [ "$max_proj" -lt 60 ];  then rec_out=" | \033[2;37mOpus 4.7 max\033[0m"
+elif [ "$max_proj" -lt 90 ];  then rec_out=" | \033[0;32mOpus 4.7 high\033[0m"
+elif [ "$max_proj" -lt 110 ]; then rec_out=" | \033[0;32mSonnet 4.6 high\033[0m"
+elif [ "$max_proj" -lt 150 ]; then rec_out=" | \033[0;33mSonnet 4.6 low\033[0m"
+else                               rec_out=" | \033[1;31mHaiku 4.5\033[0m"
+fi
+
+printf '%b%s%s%%→%s%%\033[0m%b%b\n' "$color" "$prefix" "$pct_cur_int" "$pct_proj_int" "$weekly_out" "$rec_out"
