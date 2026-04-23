@@ -390,11 +390,21 @@ elif [ "$max_proj" -lt 70 ];  then rec_text='Opus 4.7 xhigh'
 elif [ "$max_proj" -lt 100 ]; then rec_text='Opus 4.7 high'
 elif [ "$max_proj" -lt 130 ]; then rec_text='Sonnet 4.6 max'
 elif [ "$max_proj" -lt 180 ]; then rec_text='Opus 4.7 medium'
-elif [ "$max_proj" -lt 300 ]; then rec_text='Sonnet 4.6 high'
-elif [ "$max_proj" -lt 500 ]; then rec_text='Sonnet 4.6 medium'
+elif [ "$max_proj" -lt 230 ]; then rec_text='Sonnet 4.6 high'
+elif [ "$max_proj" -lt 300 ]; then rec_text='Sonnet 4.6 medium'
 else                               rec_text='Haiku 4.5'
 fi
 
 rec_seg=$(printf ' | %b%s\033[0m' "$rec_color" "$rec_text")
 
-printf '%s%s\n' "$out" "$rec_seg"
+model_seg=''
+if [ -n "${BURN_MODEL:-}" ]; then
+  model_seg=$(printf '\033[0;35m%s\033[0m' "$BURN_MODEL")
+  if [ -n "${BURN_CTX:-}" ]; then
+    model_seg=$(printf '%s  \033[0;33mctx: %s%%\033[0m | ' "$model_seg" "$BURN_CTX")
+  else
+    model_seg=$(printf '%s | ' "$model_seg")
+  fi
+fi
+
+printf '%s%s%s\n' "$model_seg" "$out" "$rec_seg"
