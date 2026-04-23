@@ -361,7 +361,7 @@ EOF
   fi
 fi
 
-out=$(printf 'Block: %b%3d%% → %4d%%\033[0m' "$block_col" "$pct_cur_int" "$pct_proj_int")
+out=$(printf 'Block: %b%d%% → %d%%\033[0m' "$block_col" "$pct_cur_int" "$pct_proj_int")
 
 if [ -n "$wc_int" ] && [ -n "$wp_int" ]; then
   if   [ "$wp_int" -lt "$GREEN_MAX" ];  then week_col="\033[2;37m"
@@ -369,7 +369,7 @@ if [ -n "$wc_int" ] && [ -n "$wp_int" ]; then
   elif [ "$wp_int" -lt "$RED_MAX" ];    then week_col="\033[0;33m"
   else                                        week_col="\033[1;31m"
   fi
-  week_seg=$(printf ' | Week: %b%3d%% → %4d%%\033[0m' "$week_col" "$wc_int" "$wp_int")
+  week_seg=$(printf ' | Week: %b%d%% → %d%%\033[0m' "$week_col" "$wc_int" "$wp_int")
   out="${out}${week_seg}"
 fi
 
