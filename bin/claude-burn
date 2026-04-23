@@ -379,32 +379,22 @@ if [ -n "${wp_int:-}" ] && [ "$wp_int" -gt "$max_proj" ]; then
   max_proj=$wp_int
 fi
 
-if   [ "$max_proj" -lt "$GREEN_MAX" ];  then rec_color='\033[2;37m'
-elif [ "$max_proj" -lt "$YELLOW_MAX" ]; then rec_color='\033[0;32m'
-elif [ "$max_proj" -lt "$RED_MAX" ];    then rec_color='\033[0;33m'
-else                                         rec_color='\033[1;31m'
-fi
-
-if   [ "$max_proj" -lt 40 ];  then rec_text='Opus 4.7 max'
-elif [ "$max_proj" -lt 70 ];  then rec_text='Opus 4.7 xhigh'
-elif [ "$max_proj" -lt 100 ]; then rec_text='Opus 4.7 high'
-elif [ "$max_proj" -lt 130 ]; then rec_text='Sonnet 4.6 max'
-elif [ "$max_proj" -lt 180 ]; then rec_text='Opus 4.7 medium'
-elif [ "$max_proj" -lt 230 ]; then rec_text='Sonnet 4.6 high'
-elif [ "$max_proj" -lt 300 ]; then rec_text='Sonnet 4.6 medium'
+if   [ "$max_proj" -lt 40 ];  then rec_text='Opus 4.7 (max)'
+elif [ "$max_proj" -lt 70 ];  then rec_text='Opus 4.7 (xhigh)'
+elif [ "$max_proj" -lt 100 ]; then rec_text='Opus 4.7 (high)'
+elif [ "$max_proj" -lt 130 ]; then rec_text='Opus 4.7 (medium)'
+elif [ "$max_proj" -lt 180 ]; then rec_text='Sonnet 4.6 (max)'
+elif [ "$max_proj" -lt 230 ]; then rec_text='Sonnet 4.6 (high)'
+elif [ "$max_proj" -lt 300 ]; then rec_text='Sonnet 4.6 (medium)'
 else                               rec_text='Haiku 4.5'
 fi
 
-rec_seg=$(printf ' | %b%s\033[0m' "$rec_color" "$rec_text")
+printf '%s\n' "$out"
 
-model_seg=''
 if [ -n "${BURN_MODEL:-}" ]; then
-  model_seg=$(printf '\033[0;35m%s\033[0m' "$BURN_MODEL")
-  if [ -n "${BURN_CTX:-}" ]; then
-    model_seg=$(printf '%s  \033[0;33mctx: %s%%\033[0m | ' "$model_seg" "$BURN_CTX")
-  else
-    model_seg=$(printf '%s | ' "$model_seg")
+  cur_text="$BURN_MODEL"
+  if [ -n "${BURN_EFFORT:-}" ]; then
+    cur_text="$cur_text ($BURN_EFFORT)"
   fi
+  printf 'Current: \033[0;35m%s\033[0m | Recommend: %s\n' "$cur_text" "$rec_text"
 fi
-
-printf '%s%s%s\n' "$model_seg" "$out" "$rec_seg"
