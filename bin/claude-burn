@@ -9,7 +9,7 @@
 
 set -eu
 
-VERSION="0.7.2"
+VERSION="0.7.3"
 
 usage() {
   cat <<EOF
@@ -379,12 +379,22 @@ if [ -n "${wp_int:-}" ] && [ "$wp_int" -gt "$max_proj" ]; then
   max_proj=$wp_int
 fi
 
-if   [ "$max_proj" -lt 40 ];  then rec_seg=$(printf ' | \033[2;37mOpus 4.7 max\033[0m')
-elif [ "$max_proj" -lt 65 ];  then rec_seg=$(printf ' | \033[2;37mOpus 4.7 xhigh\033[0m')
-elif [ "$max_proj" -lt 90 ];  then rec_seg=$(printf ' | \033[0;32mOpus 4.7 high\033[0m')
-elif [ "$max_proj" -lt 120 ]; then rec_seg=$(printf ' | \033[0;32mSonnet 4.6 high\033[0m')
-elif [ "$max_proj" -lt 170 ]; then rec_seg=$(printf ' | \033[0;33mSonnet 4.6 medium\033[0m')
-else                               rec_seg=$(printf ' | \033[1;31mHaiku 4.5\033[0m')
+if   [ "$max_proj" -lt "$GREEN_MAX" ];  then rec_color='\033[2;37m'
+elif [ "$max_proj" -lt "$YELLOW_MAX" ]; then rec_color='\033[0;32m'
+elif [ "$max_proj" -lt "$RED_MAX" ];    then rec_color='\033[0;33m'
+else                                         rec_color='\033[1;31m'
 fi
+
+if   [ "$max_proj" -lt 40 ];  then rec_text='Opus 4.7 max'
+elif [ "$max_proj" -lt 70 ];  then rec_text='Opus 4.7 xhigh'
+elif [ "$max_proj" -lt 100 ]; then rec_text='Opus 4.7 high'
+elif [ "$max_proj" -lt 130 ]; then rec_text='Sonnet 4.6 max'
+elif [ "$max_proj" -lt 180 ]; then rec_text='Opus 4.7 medium'
+elif [ "$max_proj" -lt 300 ]; then rec_text='Sonnet 4.6 high'
+elif [ "$max_proj" -lt 500 ]; then rec_text='Sonnet 4.6 medium'
+else                               rec_text='Haiku 4.5'
+fi
+
+rec_seg=$(printf ' | %b%s\033[0m' "$rec_color" "$rec_text")
 
 printf '%s%s\n' "$out" "$rec_seg"
