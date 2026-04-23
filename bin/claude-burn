@@ -9,7 +9,7 @@
 
 set -eu
 
-VERSION="0.7.3"
+VERSION="0.7.4"
 
 usage() {
   cat <<EOF
@@ -244,8 +244,14 @@ fi
 age=$((now - mtime))
 
 if [ ! -f "$CACHE" ] || [ "$age" -gt "$MAX_AGE" ]; then
-  (ccusage blocks --json --active --offline --token-limit max > "$CACHE.tmp" 2>/dev/null \
-    && mv "$CACHE.tmp" "$CACHE") >/dev/null 2>&1 &
+  if [ -d "$CACHE.lock" ]; then
+    lock_mtime=$(stat -f %m "$CACHE.lock" 2>/dev/null || stat -c %Y "$CACHE.lock" 2>/dev/null || echo 0)
+    [ $((now - lock_mtime)) -gt 60 ] && rmdir "$CACHE.lock" 2>/dev/null
+  fi
+  if mkdir "$CACHE.lock" 2>/dev/null; then
+    (ccusage blocks --json --active --offline --token-limit max > "$CACHE.tmp" 2>/dev/null \
+      && mv "$CACHE.tmp" "$CACHE"; rmdir "$CACHE.lock") >/dev/null 2>&1 &
+  fi
 fi
 
 [ ! -f "$CACHE" ] && exit 0
@@ -329,8 +335,14 @@ if [ -f "$WEEKLY_LIMIT_FILE" ]; then
         mtime_w=$(stat -f %m "$WEEKLY_CACHE" 2>/dev/null || stat -c %Y "$WEEKLY_CACHE" 2>/dev/null || echo 0)
       age_w=$((now - mtime_w))
       if [ ! -f "$WEEKLY_CACHE" ] || [ "$age_w" -gt "$WEEKLY_MAX_AGE" ]; then
-        (ccusage blocks --json --offline > "$WEEKLY_CACHE.tmp" 2>/dev/null \
-          && mv "$WEEKLY_CACHE.tmp" "$WEEKLY_CACHE") >/dev/null 2>&1 &
+        if [ -d "$WEEKLY_CACHE.lock" ]; then
+          wlock_mtime=$(stat -f %m "$WEEKLY_CACHE.lock" 2>/dev/null || stat -c %Y "$WEEKLY_CACHE.lock" 2>/dev/null || echo 0)
+          [ $((now - wlock_mtime)) -gt 120 ] && rmdir "$WEEKLY_CACHE.lock" 2>/dev/null
+        fi
+        if mkdir "$WEEKLY_CACHE.lock" 2>/dev/null; then
+          (ccusage blocks --json --offline > "$WEEKLY_CACHE.tmp" 2>/dev/null \
+            && mv "$WEEKLY_CACHE.tmp" "$WEEKLY_CACHE"; rmdir "$WEEKLY_CACHE.lock") >/dev/null 2>&1 &
+        fi
       fi
 
       if [ -f "$WEEKLY_CACHE" ]; then
