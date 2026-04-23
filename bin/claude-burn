@@ -9,7 +9,7 @@
 
 set -eu
 
-VERSION="0.6.0"
+VERSION="0.7.0"
 
 usage() {
   cat <<EOF
@@ -124,6 +124,24 @@ parse_duration() {
     *[!0-9]*) echo "" ;;
     *)     echo "$s" ;;
   esac
+}
+
+# render_bar <current_pct> <width> <ansi_code_without_esc>
+# Prints `[<filled><empty>]` with ANSI colors baked into the output.
+render_bar() {
+  awk -v cur="$1" -v w="$2" -v code="$3" '
+  BEGIN {
+    if (cur > 100) cur = 100
+    if (cur < 0)   cur = 0
+    f = int(cur * w / 100 + 0.5)
+    esc = sprintf("%c", 27)
+    out = "[" esc code
+    for (i = 0; i < f;     i++) out = out "█"
+    out = out esc "[0m" esc "[2;37m"
+    for (i = 0; i < w - f; i++) out = out "░"
+    out = out esc "[0m]"
+    print out
+  }'
 }
 
 calibrate() {
@@ -289,15 +307,16 @@ if [ -n "$hist_lines" ] && [ "$hist_lines" -gt 100 ]; then
   tail -n 100 "$HIST" > "$HIST.tmp" && mv "$HIST.tmp" "$HIST"
 fi
 
-if   [ "$pct_proj_int" -lt "$GREEN_MAX" ];  then color="\033[2;37m"
-elif [ "$pct_proj_int" -lt "$YELLOW_MAX" ]; then color="\033[0;32m"
-elif [ "$pct_proj_int" -lt "$RED_MAX" ];    then color="\033[0;33m"
-else                                             color="\033[1;31m"
+# Color code for block bar (based on projection severity) — without leading ESC
+if   [ "$pct_proj_int" -lt "$GREEN_MAX" ];  then block_code="[2;37m"
+elif [ "$pct_proj_int" -lt "$YELLOW_MAX" ]; then block_code="[0;32m"
+elif [ "$pct_proj_int" -lt "$RED_MAX" ];    then block_code="[0;33m"
+else                                              block_code="[1;31m"
 fi
-prefix="Block: "
 
-# --- Weekly indicator (only if calibrated) ---
-weekly_out=""
+# --- Weekly parsing (only if calibrated; sets wc_int + wp_int) ---
+wc_int=""
+wp_int=""
 if [ -f "$WEEKLY_LIMIT_FILE" ]; then
   w_limit=""
   w_start=""
@@ -355,29 +374,27 @@ $w_parsed
 EOF
           wc_int=$(printf "%.0f" "$wc")
           wp_int=$(printf "%.0f" "$wp")
-
-          if   [ "$wp_int" -lt "$GREEN_MAX" ];  then weekly_out=" | \033[2;37mWeek: ${wc_int}%→${wp_int}%\033[0m"
-          elif [ "$wp_int" -lt "$YELLOW_MAX" ]; then weekly_out=" | \033[0;32mWeek: ${wc_int}%→${wp_int}%\033[0m"
-          elif [ "$wp_int" -lt "$RED_MAX" ];    then weekly_out=" | \033[0;33mWeek: ${wc_int}%→${wp_int}%\033[0m"
-          else                                       weekly_out=" | \033[1;31mWeek: ${wc_int}%→${wp_int}%\033[0m"
-          fi
         fi
       fi
     fi
   fi
 fi
 
-# Model + effort recommendation based on max(block_proj, week_proj)
-max_proj=$pct_proj_int
-if [ -n "${wp_int:-}" ] && [ "$wp_int" -gt "$max_proj" ]; then
-  max_proj=$wp_int
-fi
+BAR_W=17
 
-if   [ "$max_proj" -lt 60 ];  then rec_out=" | \033[2;37mOpus 4.7 max\033[0m"
-elif [ "$max_proj" -lt 90 ];  then rec_out=" | \033[0;32mOpus 4.7 high\033[0m"
-elif [ "$max_proj" -lt 110 ]; then rec_out=" | \033[0;32mSonnet 4.6 high\033[0m"
-elif [ "$max_proj" -lt 150 ]; then rec_out=" | \033[0;33mSonnet 4.6 low\033[0m"
-else                               rec_out=" | \033[1;31mHaiku 4.5\033[0m"
-fi
+block_bar=$(render_bar "$pct_cur_int" "$BAR_W" "$block_code")
+block_burn=$(awk -v p="$pct_proj_int" 'BEGIN { printf "%.1f", p / 100 }')
+printf 'Block  %s %3d%% → %4d%% (%4.1f× burn)\n' \
+  "$block_bar" "$pct_cur_int" "$pct_proj_int" "$block_burn"
 
-printf '%b%s%s%%→%s%%\033[0m%b%b\n' "$color" "$prefix" "$pct_cur_int" "$pct_proj_int" "$weekly_out" "$rec_out"
+if [ -n "$wc_int" ] && [ -n "$wp_int" ]; then
+  if   [ "$wp_int" -lt "$GREEN_MAX" ];  then week_code="[2;37m"
+  elif [ "$wp_int" -lt "$YELLOW_MAX" ]; then week_code="[0;32m"
+  elif [ "$wp_int" -lt "$RED_MAX" ];    then week_code="[0;33m"
+  else                                        week_code="[1;31m"
+  fi
+  week_bar=$(render_bar "$wc_int" "$BAR_W" "$week_code")
+  week_burn=$(awk -v p="$wp_int" 'BEGIN { printf "%.1f", p / 100 }')
+  printf 'Week   %s %3d%% → %4d%% (%4.1f× burn)\n' \
+    "$week_bar" "$wc_int" "$wp_int" "$week_burn"
+fi
