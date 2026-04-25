@@ -9,7 +9,7 @@
 
 set -eu
 
-VERSION="0.7.4"
+VERSION="0.7.5"
 
 usage() {
   cat <<EOF
@@ -315,8 +315,11 @@ if [ -f "$WEEKLY_LIMIT_FILE" ]; then
   done < "$WEEKLY_LIMIT_FILE"
 
   if [ -n "$w_limit" ] && [ -n "$w_start" ]; then
-    # Convert week start date to epoch (macOS / Linux)
-    w_epoch=$(date -j -f "%Y-%m-%d" "$w_start" "+%s" 2>/dev/null \
+    # Convert week-start date to its midnight epoch (macOS / Linux).
+    # macOS `date -j -f "%Y-%m-%d"` carries the current time-of-day forward
+    # when the format omits hours, which would make (now - ws) ≈ 0 and blow
+    # up the weekly projection — so pin the time explicitly.
+    w_epoch=$(date -j -f "%Y-%m-%d %H:%M:%S" "$w_start 00:00:00" "+%s" 2>/dev/null \
       || date -d "$w_start" "+%s" 2>/dev/null || echo "")
 
     if [ -n "$w_epoch" ]; then
